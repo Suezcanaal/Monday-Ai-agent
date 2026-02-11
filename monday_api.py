@@ -2,13 +2,21 @@ import os
 import pandas as pd
 from connection_manager import monday_manager
 from dotenv import load_dotenv
-
+import streamlit as st
 load_dotenv()
 
 def fetch_deals():
     """
     Fetches all items from the board defined in .env
     """
+    # Try finding ID in .env (Local) OR Streamlit Secrets (Cloud)
+    board_id = os.getenv("MONDAY_BOARD_ID")
+    if not board_id and "MONDAY_BOARD_ID" in st.secrets:
+        board_id = st.secrets["MONDAY_BOARD_ID"]
+
+    if not board_id:
+        raise Exception("Board ID not found.")
+    
     if not monday_manager.is_connected:
         success, msg = monday_manager.connect()
         if not success:
