@@ -1,52 +1,50 @@
 import pandas as pd
 
-def get_portfolio_metrics(df):
-    """Calculates high-level portfolio health metrics."""
-    total_pipeline = df["Value"].sum()
+def ad_hoc_analysis(df, dimension=None, metric="count"):
+    """
+    Performs dynamic analysis based on the user's query intent.
     
-    weighted_pipeline = df["Weighted_Value"].sum() if "Weighted_Value" in df.columns else 0
-    
-    avg_deal = df["Value"].mean()
-    deal_count = len(df)
-    
-    return {
-        "total_pipeline": total_pipeline,
-        "weighted_pipeline": weighted_pipeline,
-        "avg_deal_size": avg_deal,
-        "deal_count": deal_count
-    }
+    Args:
+        df: The dataframe
+        dimension: Column to group by (e.g., 'Status', 'Group', 'Owner')
+        metric: 'count' or 'sum' (for Value)
+    """
+    if df.empty:
+        return {"error": "Dataframe is empty."}
 
-def get_sector_performance(df):
-    """Groups data by Sector to compare performance."""
-    if "Sector" not in df.columns:
-        return None
-        
-    sector_stats = df.groupby("Sector").agg({
-        "Value": "sum",
-        "Weighted_Value": "sum" if "Weighted_Value" in df.columns else "sum",
-        "Deal": "count"
-    }).sort_values(by="Value", ascending=False)
-    
-    return sector_stats
+    # Default to Status if no dimension found or if dimension is invalid
+    if not dimension or dimension not in df.columns:
+        # Fallback logic: prefer Status, then Group, then Item
+        if "Status" in df.columns:
+            dimension = "Status"
+        elif "Group" in df.columns:
+            dimension = "Group"
+        else:
+            dimension = "Item"
 
-def get_stage_distribution(df):
-    """Analyzes where deals are getting stuck."""
-    if "Stage" not in df.columns:
-        return None
-        
-    stage_stats = df["Stage"].value_counts().sort_index()
-    return stage_stats
+    # If we still can't find the column, return error
+    if dimension not in df.columns:
+        return {"error": f"Could not group by '{dimension}'. Column not found."}
 
-def get_data_health(df):
-    """Checks for data quality issues."""
-    issues = []
-    
-    if df["Value"].sum() == 0:
-        issues.append("⚠ Total pipeline value is 0. Check 'Masked Deal value' column.")
-        
-    if "Target_Close" in df.columns:
-        missing_dates = df["Target_Close"].isna().sum()
-        if missing_dates > 0:
-            issues.append(f"⚠ {missing_dates} deals are missing a Target Close Date.")
-        
-    return issues
+    # Dynamic Grouping
+    try:
+        if metric == "sum" and "Value" in df.columns:
+            # Summing Value (Revenue, Budget)
+            # Ensure Value is numeric before summing
+            df["Value"] = pd.to_numeric(df["Value"], errors='coerce').fillna(0)
+            result = df.groupby(dimension)["Value"].sum().sort_values(ascending=False)
+            # Format as currency
+            formatted_result = result.apply(lambda x: f"${x:,.0f}")
+        else:
+            # Counting Items (Work Orders, Tasks)
+            result = df[dimension].value_counts()
+            formatted_result = result
+            
+        return {
+            "data": result,
+            "formatted": formatted_result,
+            "dimension": dimension,
+            "metric": metric
+        }
+    except Exception as e:
+        return {"error": f"Analysis failed: {str(e)}"}

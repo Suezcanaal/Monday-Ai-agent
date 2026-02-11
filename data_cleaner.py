@@ -1,63 +1,45 @@
 import pandas as pd
 import numpy as np
 
-def clean_deals(df):
+def clean_data(df, mapping_config=None):
+    """
+    Cleans data based on the specific board configuration.
+    """
     if df.empty:
         return df
 
-    # 1. Standardize Column Headers
+    # 1. Clean Headers (Strip whitespace)
     df.columns = df.columns.str.strip()
     
-    # 2. Rename Logic (Robust Mappings)
-    mapping = {
-        "Name": "Deal",              # From Monday API
-        "Deal Name": "Deal",         # From your Screenshot
-        "Owner code": "Owner",
-        "Client Code": "Client",
-        "Deal Status": "Status",
-        "Close Date (A)": "Actual_Close",
-        "Closure Probability": "Probability_Label", 
-        "Masked Deal value": "Value",
-        "Tentative Close Date": "Target_Close",
-        "Deal Stage": "Stage",
-        "Product deal": "Product",
-        "Sector/service": "Sector",
-        "Created Date": "Created_At"
-    }
+    # 2. Apply Specific Mapping (if provided)
+    if mapping_config:
+        # We only rename columns that actually exist in the dataframe
+        # This prevents errors if Monday API changes slightly
+        valid_map = {k: v for k, v in mapping_config.items() if k in df.columns}
+        df = df.rename(columns=valid_map)
     
-    df = df.rename(columns=mapping)
+    # 3. Handle Missing Core Columns (Resilience)
+    # If mapping failed or column missing, ensure we have defaults
+    required_cols = ["Item", "Status", "Value", "Group", "Owner"]
+    for col in required_cols:
+        if col not in df.columns:
+            df[col] = "Unknown" # Placeholder to prevent crash
 
-    # 3. Numeric Conversions
+    # 4. Text Cleaning
+    text_cols = ["Item", "Status", "Group", "Owner", "Stage"]
+    for col in text_cols:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip().replace("nan", "Unknown")
+
+    # 5. Numeric Cleaning
     if "Value" in df.columns:
+        # Handle "489360" or "264,398.08" format
         df["Value"] = df["Value"].astype(str).str.replace(r'[$,]', '', regex=True)
         df["Value"] = pd.to_numeric(df["Value"], errors="coerce").fillna(0)
 
-    # 4. Probability Mapping
-    if "Probability_Label" in df.columns:
-        prob_map = {
-            "high": 0.80,
-            "medium": 0.50,
-            "low": 0.20,
-            "won": 1.00,
-            "lost": 0.00
-        }
-        df["Probability_Score"] = df["Probability_Label"].astype(str).str.lower().map(prob_map).fillna(0.1)
-        
-        # Calculate Weighted Value
-        if "Value" in df.columns:
-            df["Weighted_Value"] = df["Value"] * df["Probability_Score"]
-
-    # 5. Date Parsing (Fixed for Mixed Formats)
-    date_cols = ["Actual_Close", "Target_Close", "Created_At"]
-    for col in date_cols:
-        if col in df.columns:
-            # format='mixed' handles ISO (YYYY-MM-DD) and European (DD-MM-YYYY) together
-            df[col] = pd.to_datetime(df[col], errors="coerce", dayfirst=True, format="mixed")
-
-    # 6. Text Normalization
-    text_cols = ["Status", "Stage", "Sector", "Owner", "Product"]
-    for col in text_cols:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.strip()
+    # 6. Date Cleaning (DD-MM-YYYY format from your screenshots)
+    if "Date" in df.columns:
+        # dayfirst=True is CRITICAL for dates like 26-02-2026
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True, format="mixed")
 
     return df

@@ -1,131 +1,103 @@
 import streamlit as st
 from connection_manager import monday_manager
-from monday_api import fetch_deals
-from data_cleaner import clean_deals
-import analytics
-import insight_generator
+from monday_api import fetch_board_data
+from data_cleaner import clean_data
+from analytics import ad_hoc_analysis
+from config import BOARD_CONFIG, get_board_id
 
-# Page Config
-st.set_page_config(page_title="Monday.com Founder BI Agent", layout="wide")
+st.set_page_config(page_title="Enterprise BI Agent", layout="wide")
 
-st.title("🤖 Monday.com Founder BI Agent")
+st.title("🤖 Monday.com Enterprise BI Agent")
 
-# --- INITIALIZATION ---
-if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "assistant", "content": "Hello! I am connected to your Monday.com board. Ask me about pipeline performance, sectors, or specific metrics.", "data": None}
-    ]
-
-# --- SIDEBAR ---
+# Sidebar
 with st.sidebar:
-    st.header("🔌 System Status")
+    st.header("🔌 Connection")
     if not monday_manager.is_connected:
-        with st.spinner("Connecting..."):
-            success, msg = monday_manager.connect()
-            if success:
-                st.success("System Online")
-            else:
-                st.error(msg)
+        success, msg = monday_manager.connect()
+        if success:
+            st.success("Connected")
+        else:
+            st.error(msg)
     else:
-        st.success("✅ System Online")
-        if st.button("Clear Chat History"):
+        st.success("System Online")
+        if st.button("Clear Chat"):
             st.session_state.messages = []
             st.rerun()
 
-# --- CHAT INTERFACE ---
+# Chat History
+if "messages" not in st.session_state:
+    st.session_state.messages = [{"role": "assistant", "content": "I can analyze your **Sales Pipeline** and **Work Orders**. Try asking:\n- *Show me revenue by Sector*\n- *Which Work Orders are completed?*"}]
 
-# 1. Display existing chat history
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-        # Check if there is a dataframe attached to this message and display it
-        if message.get("data") is not None:
-            st.dataframe(message["data"])
+for msg in st.session_state.messages:
+    st.chat_message(msg["role"]).write(msg["content"])
+    if "data" in msg and msg["data"] is not None:
+        st.dataframe(msg["data"])
 
-# 2. Handle User Input
-if prompt := st.chat_input("Ask a question (e.g., 'How is the Mining pipeline?')..."):
-    
-    # User Message
-    with st.chat_message("user"):
-        st.markdown(prompt)
-    st.session_state.messages.append({"role": "user", "content": prompt, "data": None})
+# Input Logic
+if prompt := st.chat_input("Ask about deals, execution, or revenue..."):
+    st.chat_message("user").write(prompt)
+    st.session_state.messages.append({"role": "user", "content": prompt})
 
-    # Assistant Logic
     with st.chat_message("assistant"):
-        message_placeholder = st.empty()
-        full_response = ""
-        extracted_data = None # This will hold the table we want to show
+        with st.spinner("Analyzing..."):
+            
+            # 1. ROUTING LOGIC
+            prompt_lower = prompt.lower()
+            selected_board_key = None
+            
+            # Find which board config matches the user's keywords
+            for key, config in BOARD_CONFIG.items():
+                if any(k in prompt_lower for k in config["keywords"]):
+                    selected_board_key = key
+                    break
+            
+            # Default to 'deals' if no specific keyword found
+            if not selected_board_key:
+                selected_board_key = "deals"
 
-        if not monday_manager.is_connected:
-            full_response = "⚠ Please check the connection in the sidebar first."
-            message_placeholder.markdown(full_response)
-        else:
-            with st.spinner("Analyzing data..."):
-                try:
-                    # FETCH AND CLEAN
-                    raw_df = fetch_deals()
-                    df = clean_deals(raw_df)
+            board_conf = BOARD_CONFIG[selected_board_key]
+            board_id = get_board_id(board_conf["env_var"])
 
-                    if df.empty:
-                        full_response = "I couldn't find any data on the board."
+            if not board_id:
+                response = f"⚠ **Configuration Error:** Board ID for '{board_conf['name']}' not found."
+                st.write(response)
+            else:
+                # 2. FETCH DATA
+                raw_df = fetch_board_data(board_id)
+
+                if raw_df.empty:
+                    response = f"I connected to **{board_conf['name']}**, but found no data. Check your Board ID."
+                    st.write(response)
+                else:
+                    # 3. CLEANING (Pass the specific column map!)
+                    df = clean_data(raw_df, mapping_config=board_conf["columns"])
+
+                    # 4. ANALYSIS
+                    # Detect Metric (Money vs Count)
+                    metric = "sum" if any(x in prompt_lower for x in ["value", "revenue", "amount", "budget"]) else "count"
+                    
+                    # Detect Dimension (Grouping)
+                    dimension = "Status" # Default
+                    if "owner" in prompt_lower or "personnel" in prompt_lower: dimension = "Owner"
+                    if "sector" in prompt_lower or "group" in prompt_lower: dimension = "Group"
+                    if "stage" in prompt_lower: dimension = "Stage"
+                    if "item" in prompt_lower or "name" in prompt_lower: dimension = "Item"
+
+                    result = ad_hoc_analysis(df, dimension, metric)
+
+                    # 5. GENERATE RESPONSE
+                    if "error" in result:
+                        response = f"⚠ {result['error']}"
                     else:
-                        # ANALYTICS LOGIC
-                        sectors = analytics.get_sector_performance(df)
-                        available_sectors = sectors.index.tolist() if sectors is not None else []
+                        top_cat = result['formatted'].index[0]
+                        top_val = result['formatted'].iloc[0]
                         
-                        prompt_lower = prompt.lower()
+                        response = f"### 📂 Source: {board_conf['name']}\n"
+                        response += f"Breaking down **{metric}** by **{dimension}**:\n\n"
+                        response += f"**Top Result:** '{top_cat}' with {top_val}.\n"
                         
-                        # --- INTENT RECOGNITION ---
+                        st.markdown(response)
+                        st.dataframe(result['formatted'])
                         
-                        # 1. Sector Specific
-                        detected_sector = next((s for s in available_sectors if s.lower() in prompt_lower), None)
-                        
-                        if detected_sector:
-                            # Filter data for this sector
-                            sector_df = df[df["Sector"] == detected_sector]
-                            metrics = {
-                                "total_pipeline": sector_df["Value"].sum(),
-                                "weighted_pipeline": sector_df["Weighted_Value"].sum() if "Weighted_Value" in sector_df.columns else 0,
-                                "avg_deal_size": sector_df["Value"].mean(),
-                                "deal_count": len(sector_df)
-                            }
-                            full_response = f"### 📊 Analysis for {detected_sector}\n"
-                            full_response += f"**Pipeline:** ${metrics['total_pipeline']:,.0f} | **Deals:** {metrics['deal_count']}\n"
-                            
-                            if metrics['deal_count'] > 0:
-                                full_response += f"\n- **Risk-Adjusted Forecast:** ${metrics['weighted_pipeline']:,.0f}"
-                                full_response += f"\n- **Avg Deal Size:** ${metrics['avg_deal_size']:,.0f}"
-                            
-                            # ATTACH DATA: Show only the rows for this sector
-                            extracted_data = sector_df
-
-                        # 2. General Summary
-                        elif any(x in prompt_lower for x in ["overview", "summary", "performance", "health"]):
-                            portfolio = analytics.get_portfolio_metrics(df)
-                            stage_dist = analytics.get_stage_distribution(df)
-                            health = analytics.get_data_health(df)
-                            full_response = insight_generator.generate_executive_summary(portfolio, sectors, stage_dist, health)
-                            
-                            # ATTACH DATA: Show the high-level Sector Performance table
-                            extracted_data = sectors 
-
-                        # 3. Greetings
-                        elif any(x in prompt_lower for x in ["hello", "hi", "help"]):
-                            full_response = "I can help you analyze your board. Try asking:\n- *Give me a portfolio summary*\n- *How is the Mining sector performing?*"
-
-                        # 4. Fallback
-                        else:
-                            full_response = f"I didn't understand that specific query. Try asking for a **summary** or about a specific sector like: **{', '.join(available_sectors)}**."
-
-                except Exception as e:
-                    full_response = f"❌ An error occurred: {str(e)}"
-        
-        # Display Response
-        message_placeholder.markdown(full_response)
-        
-        # Display Table if it exists
-        if extracted_data is not None:
-            st.dataframe(extracted_data)
-
-        # Save to History
-        st.session_state.messages.append({"role": "assistant", "content": full_response, "data": extracted_data})
+                        # Save to history
+                        st.session_state.messages.append({"role": "assistant", "content": response, "data": result['formatted']})

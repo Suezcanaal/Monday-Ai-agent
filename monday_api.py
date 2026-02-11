@@ -1,34 +1,21 @@
-import os
 import pandas as pd
 from connection_manager import monday_manager
-from dotenv import load_dotenv
-import streamlit as st
-load_dotenv()
 
-def fetch_deals():
+def fetch_board_data(board_id):
     """
-    Fetches all items from the board defined in .env
+    Generic fetcher that works for ANY Monday.com board.
     """
-    # Try finding ID in .env (Local) OR Streamlit Secrets (Cloud)
-    board_id = os.getenv("MONDAY_BOARD_ID")
-    if not board_id and "MONDAY_BOARD_ID" in st.secrets:
-        board_id = st.secrets["MONDAY_BOARD_ID"]
-
     if not board_id:
-        raise Exception("Board ID not found.")
-    
+        raise Exception("No Board ID provided.")
+
     if not monday_manager.is_connected:
-        success, msg = monday_manager.connect()
-        if not success:
-            raise Exception(msg)
+        monday_manager.connect()
 
-    board_id = os.getenv("MONDAY_BOARD_ID")
-    if not board_id:
-        raise Exception("Board ID not found in .env file.")
-
+    # Query 500 items from the specific board ID
     query = f"""
     query {{
       boards(ids: {board_id}) {{
+        name
         items_page(limit: 500) {{
           items {{
             name
@@ -45,10 +32,15 @@ def fetch_deals():
     data = monday_manager.execute_query(query)
 
     if 'errors' in data:
-        raise Exception(f"Monday API Error: {data['errors']}")
+        return pd.DataFrame()
 
     try:
-        items = data["data"]["boards"][0]["items_page"]["items"]
+        # Check if board data exists
+        if not data["data"]["boards"]:
+            return pd.DataFrame()
+            
+        board_data = data["data"]["boards"][0]
+        items = board_data["items_page"]["items"]
     except (KeyError, IndexError, TypeError):
         return pd.DataFrame()
 
@@ -56,7 +48,8 @@ def fetch_deals():
     for item in items:
         row = {"Name": item["name"]}
         for col in item["column_values"]:
-            if col["column"]["title"]:
+            # Ensure column title exists before adding
+            if col.get("column") and col["column"].get("title"):
                 row[col["column"]["title"]] = col["text"]
         rows.append(row)
 
