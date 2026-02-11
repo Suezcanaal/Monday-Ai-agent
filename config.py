@@ -42,6 +42,7 @@ BOARD_CONFIG = {
             "Deal Status": "Status",
             "Masked Deal value": "Value",
             "Tentative Close Date": "Date",
+            "Close Date (A)": "Actual_Date", # <--- ADD THIS LINE
             "Sector/service": "Group",
             "Deal Stage": "Stage",
             "Closure Probability": "Probability"
