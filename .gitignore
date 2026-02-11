@@ -1,0 +1,14 @@
+# Security: Ignore environment variables
+.env
+.venv
+env/
+venv/
+
+# Python: Ignore cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# OS: Ignore system files
+.DS_Store
+Thumbs.db
